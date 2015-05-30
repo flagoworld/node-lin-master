@@ -1,6 +1,6 @@
 var async = require('async');
 var _ = require('lodash');
-var SerialPort = require('serialport');
+var SerialPort = require('trivial-port');
 
 // SerialPort.list(function (err, ports) {
 //   ports.forEach(function(port) {
@@ -18,18 +18,20 @@ function LINMaster(options)
     this.options = _.defaults(options,
     {
         serialPort: '/dev/ttyAMA0',
-        baudrate: 200,
-        break_bytes: 2
+        baudRate: 200,
+        breakBytes: 2,
+        framePaddingPercent: 1
     });
 
-    this.byte_time = MSEC_SEC / this.options.baudrate * 8;
-    this.break_time = this.byte_time * this.options.break_bytes;
-    this.frame_bytes = this.options.break_bytes + 1 + 8 + 1; // break + sync + data + checksum
-    this.frame_time = this.byte_time * this.frame_bytes * 1.4; // spec says to give 40% padding
+    this.byteTime = MSEC_SEC / this.options.baudRate * 8;
+    this.breakTime = this.byteTime * this.options.breakBytes;
+    this.frameBytes = this.options.breakBytes + 1 + 8 + 1; // break + sync + data + checksum
+    this.frameTime = this.byteTime * this.frameBytes * (1 + this.options.framePaddingPercent); // spec says to give 40% padding
     this.serialPort = null;
     this.interval = null;
     this.schedule = [];
     this.currentFrame = 0;
+    this.lastFrameData = new Buffer(0);
 }
 
 LINMaster.prototype.start = function(callback)
@@ -38,36 +40,54 @@ LINMaster.prototype.start = function(callback)
 
     // var parserDelimiter = [];
     //
-    // for(var i = 0; i < self.options.break_bytes; ++i)
+    // for(var i = 0; i < self.options.breakBytes; ++i)
     // {
     //     parserDelimiter.push(0);
     // }
     //
-    this.serialPort = new SerialPort.SerialPort(this.options.serialPort,
+    this.serialPort = new SerialPort(
     {
-        baudrate: self.options.baudrate,
-        platformOptions:
-        {
-            vmin: 1,
-            vtime: 0
-        },
+        serialPort: self.options.serialPort,
+        baudRate: self.options.baudRate,
+        // platformOptions:
+        // {
+        //     vmin: 1,
+        //     vtime: 0
+        // },
         // parser: function(emitter, buffer) { console.log(buffer.toString('hex')); emitter.emit('data', buffer); }
     });
 
-    this.serialPort.on('open', function()
+    this.serialPort.initialize(function(err)
     {
-        callback();
-
-        self.interval = setInterval(function()
-        {
-            self.nextFrame();
-        }, self.frame_time);
+        console.log('INIT ERR: ' + err);
+        process.exit();
     });
 
     this.serialPort.on('data', function(data)
     {
-        self.respond(data);
+        self.lastFrameData = Buffer.concat([self.lastFrameData, data], self.lastFrameData.length + data.length);
     });
+
+    callback();
+
+    self.interval = setInterval(function()
+    {
+        var frame = self.schedule[self.currentFrame];
+        var data = self.lastFrameData;
+
+        self.lastFrameData = new Buffer(0);
+
+        console.log(frame.getId() + '/R: ' + data.toString('hex'));
+        frame.handleResponse(data);
+
+        self.currentFrame += 1;
+        if(self.currentFrame >= self.schedule.length)
+        {
+            self.currentFrame = 0;
+        }
+
+        self.processFrame(frame);
+    }, self.frameTime);
 }
 
 LINMaster.prototype.addFrame = function(frame)
@@ -75,21 +95,13 @@ LINMaster.prototype.addFrame = function(frame)
     this.schedule.push(frame);
 }
 
-LINMaster.prototype.nextFrame = function()
+LINMaster.prototype.processFrame = function(frame)
 {
     var self = this;
 
     if(!self.schedule.length)
     {
         return;
-    }
-
-    var frame = self.schedule[self.currentFrame];
-
-    self.currentFrame += 1;
-    if(self.currentFrame >= self.schedule.length)
-    {
-        self.currentFrame = 0;
     }
 
     var frameSyncByte = 0x55;
@@ -109,11 +121,11 @@ LINMaster.prototype.nextFrame = function()
 
     if(frameData)
     {
-        frameBuffer = new Buffer(self.options.break_bytes + 3 + frameData.length);
+        frameBuffer = new Buffer(self.options.breakBytes + 3 + frameData.length);
 
         for(var i = 0; i < frameData.length; ++i)
         {
-            var start = self.options.break_bytes + 2 + i;
+            var start = self.options.breakBytes + 2 + i;
             frameBuffer.fill(frameData[i], start, start + 1);
         }
 
@@ -131,16 +143,16 @@ LINMaster.prototype.nextFrame = function()
             return sum;
         })();
 
-        var start = self.options.break_bytes + 2 + frameData.length;
+        var start = self.options.breakBytes + 2 + frameData.length;
         frameBuffer.fill(frameChecksum, start, start + 1);
     }else
     {
-        frameBuffer = new Buffer(self.options.break_bytes + 2);
+        frameBuffer = new Buffer(self.options.breakBytes + 2);
     }
 
-    frameBuffer.fill(0, 0, self.options.break_bytes)
-    frameBuffer.fill(frameSyncByte, self.options.break_bytes, self.options.break_bytes + 1);
-    frameBuffer.fill(frameProtectedIdentifier, self.options.break_bytes + 1, self.options.break_bytes + 2);
+    frameBuffer.fill(0, 0, self.options.breakBytes)
+    frameBuffer.fill(frameSyncByte, self.options.breakBytes, self.options.breakBytes + 1);
+    frameBuffer.fill(frameProtectedIdentifier, self.options.breakBytes + 1, self.options.breakBytes + 2);
 
     // console.log(frameSyncByte);
     // console.log(frameProtectedIdentifier);
@@ -155,13 +167,6 @@ LINMaster.prototype.nextFrame = function()
         buf.push(frameBuffer[i]);
     }
     console.log('W: ' + buf);
-}
-
-LINMaster.prototype.respond = function(data)
-{
-    var frame = this.schedule[this.currentFrame];
-
-    frame.handleResponse(data);
 }
 
 module.exports = LINMaster;

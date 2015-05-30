@@ -14,7 +14,7 @@ LINFrame.prototype.getData = function()
 
 LINFrame.prototype.handleResponse = function(data)
 {
-    console.log(this.getId() + '/R: ' + data.toString('hex'));
+    //console.log(this.getId() + '/R: ' + data.toString('hex'));
 }
 
 module.exports = LINFrame;
