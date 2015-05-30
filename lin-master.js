@@ -19,13 +19,13 @@ function LINMaster(options)
     {
         serialPort: '/dev/ttyAMA0',
         baudrate: 200,
-        break_bits: 13,
-        response_time: 20,
+        break_bytes: 2
     });
 
-    this.bit_time = MSEC_SEC / this.options.baudrate;
-    this.break_time = this.bit_time * this.options.break_bits
-    this.frame_time = this.bit_time * (this.options.break_bits + this.options.response_time + (8 * 11)); // without break bits, there are max 11 octets in a frame
+    this.byte_time = MSEC_SEC / this.options.baudrate * 8;
+    this.break_time = this.byte_time * this.options.break_bytes;
+    this.frame_bytes = this.options.break_bytes + 1 + 8 + 1; // break + sync + data + checksum
+    this.frame_time = this.byte_time * this.frame_bytes * 1.4; // spec says to give 40% padding
     this.serialPort = null;
     this.interval = null;
     this.schedule = [];
@@ -36,9 +36,22 @@ LINMaster.prototype.start = function(callback)
 {
     var self = this;
 
+    // var parserDelimiter = [];
+    //
+    // for(var i = 0; i < self.options.break_bytes; ++i)
+    // {
+    //     parserDelimiter.push(0);
+    // }
+    //
     this.serialPort = new SerialPort.SerialPort(this.options.serialPort,
     {
-        baudrate: self.options.baudrate
+        baudrate: self.options.baudrate,
+        platformOptions:
+        {
+            vmin: 1,
+            vtime: 0
+        },
+        // parser: function(emitter, buffer) { console.log(buffer.toString('hex')); emitter.emit('data', buffer); }
     });
 
     this.serialPort.on('open', function()
@@ -96,7 +109,13 @@ LINMaster.prototype.nextFrame = function()
 
     if(frameData)
     {
-        frameBuffer = new Buffer(3 + frameData.length);
+        frameBuffer = new Buffer(self.options.break_bytes + 3 + frameData.length);
+
+        for(var i = 0; i < frameData.length; ++i)
+        {
+            var start = self.options.break_bytes + 2 + i;
+            frameBuffer.fill(frameData[i], start, start + 1);
+        }
 
         var frameChecksum = (function()
         {
@@ -112,51 +131,35 @@ LINMaster.prototype.nextFrame = function()
             return sum;
         })();
 
-        for(var i = 0; i < frameData.length; ++i)
-        {
-            frameBuffer.fill(frameData[i], 2 + i);
-        }
-
-        frameBuffer.fill(frameChecksum, 2 + frameData.length);
+        var start = self.options.break_bytes + 2 + frameData.length;
+        frameBuffer.fill(frameChecksum, start, start + 1);
     }else
     {
-        frameBuffer = new Buffer(2);
+        frameBuffer = new Buffer(self.options.break_bytes + 2);
     }
 
-    frameBuffer.fill(frameSyncByte, 0);
-    frameBuffer.fill(frameProtectedIdentifier, 1);
+    frameBuffer.fill(0, 0, self.options.break_bytes)
+    frameBuffer.fill(frameSyncByte, self.options.break_bytes, self.options.break_bytes + 1);
+    frameBuffer.fill(frameProtectedIdentifier, self.options.break_bytes + 1, self.options.break_bytes + 2);
 
     // console.log(frameSyncByte);
     // console.log(frameProtectedIdentifier);
     // console.log(frameData);
     // console.log(frameChecksum);
-    console.log('W: ' + frameBuffer.toString('hex'));
 
-    async.series(
-    [
-        // BREAK
-        function(cb)
-        {
-            self.serialPort.set({brk:false}, function()
-            {
-                setTimeout(function()
-                {
-                    self.serialPort.set({brk:false}, function() {cb();});
-                }, self.break_time);
-            });
-        },
+    self.serialPort.write(frameBuffer, function() {});
 
-        // PACKET
-        function(cb)
-        {
-            self.serialPort.write(frameBuffer, function() {cb();});
-        }
-    ], function() {});
+    var buf = [];
+    for(var i = 0; i < frameBuffer.length; ++i)
+    {
+        buf.push(frameBuffer[i]);
+    }
+    console.log('W: ' + buf);
 }
 
 LINMaster.prototype.respond = function(data)
 {
-    var frame = this.schedule[0];
+    var frame = this.schedule[this.currentFrame];
 
     frame.handleResponse(data);
 }
