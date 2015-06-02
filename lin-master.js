@@ -18,9 +18,10 @@ function LINMaster(options)
     this.options = _.defaults(options,
     {
         serialPort: '/dev/ttyAMA0',
-        baudRate: 200,
+        baudRate: 19200,
         breakBytes: 2,
-        framePaddingPercent: 1
+        framePaddingPercent: 0.4,
+        interFrameSpace: 10
     });
 
     this.byteTime = MSEC_SEC / this.options.baudRate * 8;
@@ -29,9 +30,14 @@ function LINMaster(options)
     this.frameTime = this.byteTime * this.frameBytes * (1 + this.options.framePaddingPercent); // spec says to give 40% padding
     this.serialPort = null;
     this.interval = null;
-    this.schedule = [];
-    this.currentFrame = 0;
     this.lastFrameData = new Buffer(0);
+
+    this.currentFrame = 0;
+    this.lastFrame = null;
+
+    this.schedule = [];
+    this.scheduleEventCollision = [];
+    this.scheduleSporadic = [];
 }
 
 LINMaster.prototype.start = function(callback)
@@ -59,7 +65,7 @@ LINMaster.prototype.start = function(callback)
 
     this.serialPort.initialize(function(err)
     {
-        console.log('INIT ERR: ' + err);
+        console.log('SERIAL INIT ERR: ' + err);
         process.exit();
     });
 
@@ -72,27 +78,73 @@ LINMaster.prototype.start = function(callback)
 
     self.interval = setInterval(function()
     {
-        var frame = self.schedule[self.currentFrame];
         var data = self.lastFrameData;
-
         self.lastFrameData = new Buffer(0);
 
-        console.log(frame.getId() + '/R: ' + data.toString('hex'));
-        frame.handleResponse(data);
 
-        self.currentFrame += 1;
-        if(self.currentFrame >= self.schedule.length)
+
+        var frame = self.lastFrame;
+
+        if(frame)
         {
-            self.currentFrame = 0;
+            if(frame.isRequestFrame)
+            {
+                if(frame.frameType == frame.type.LIN_FRAME_EVENT_TRIGGERED)
+                {
+                    // TODO: Detect collision
+                    var collision = false;
+
+                    if(collision)
+                    {
+                        self.scheduleEventCollision = _.flatten([null, frame.handleCollision()]);
+                    }else
+                    {
+                        frame.handleResponse(data);
+                    }
+                }else
+                {
+                    frame.handleResponse(data);
+                }
+
+                // console.log('R: ' + data.toString('hex'));
+            }
         }
 
-        self.processFrame(frame);
-    }, self.frameTime);
+        // console.log('R: ' + data.toString('hex'));
+        self.processFrame(self.nextFrame());
+
+    }, self.frameTime + self.options.interFrameSpace);
 }
 
 LINMaster.prototype.addFrame = function(frame)
 {
     this.schedule.push(frame);
+}
+
+LINMaster.prototype.nextFrame = function()
+{
+    if(this.scheduleEventCollision.length)
+    {
+        this.lastFrame = this.scheduleEventCollision.shift();
+        return this.lastFrame;
+    }
+
+    if(this.scheduleSporadic.length)
+    {
+        this.lastFrame = this.scheduleSporadic.shift()
+        return this.lastFrame;
+    }
+
+    this.lastFrame = this.schedule[this.currentFrame];
+
+    this.currentFrame += 1;
+
+    if(this.currentFrame >= this.schedule.length)
+    {
+        this.currentFrame = 0;
+    }
+
+    return this.lastFrame;
 }
 
 LINMaster.prototype.processFrame = function(frame)
@@ -107,7 +159,7 @@ LINMaster.prototype.processFrame = function(frame)
     var frameSyncByte = 0x55;
     var frameProtectedIdentifier = (function()
     {
-        var bits = frame.getId().toString(2);
+        var bits = frame.protectedIdentifier.toString(2);
 
         bits += bits[0] ^ bits[1] ^ bits[2] ^ bits[4];
         bits += 1 - (bits[1] ^ bits[3] ^ bits[4] ^ bits[5]);
@@ -115,12 +167,15 @@ LINMaster.prototype.processFrame = function(frame)
         return parseInt(bits, 2);
     })();
 
-    var frameData = frame.getData();
-
     var frameBuffer;
 
-    if(frameData)
+    if(frame.isRequestFrame)
     {
+        frameBuffer = new Buffer(self.options.breakBytes + 2);
+    }else
+    {
+        var frameData = frame.getResponseData();
+
         frameBuffer = new Buffer(self.options.breakBytes + 3 + frameData.length);
 
         for(var i = 0; i < frameData.length; ++i)
@@ -145,9 +200,6 @@ LINMaster.prototype.processFrame = function(frame)
 
         var start = self.options.breakBytes + 2 + frameData.length;
         frameBuffer.fill(frameChecksum, start, start + 1);
-    }else
-    {
-        frameBuffer = new Buffer(self.options.breakBytes + 2);
     }
 
     frameBuffer.fill(0, 0, self.options.breakBytes)
@@ -161,12 +213,13 @@ LINMaster.prototype.processFrame = function(frame)
 
     self.serialPort.write(frameBuffer, function() {});
 
-    var buf = [];
-    for(var i = 0; i < frameBuffer.length; ++i)
-    {
-        buf.push(frameBuffer[i]);
-    }
-    console.log('W: ' + buf);
+    // var buf = [];
+    // for(var i = 0; i < frameBuffer.length; ++i)
+    // {
+    //     buf.push(frameBuffer[i]);
+    // }
+    // console.log('W: ' + buf);
+    // console.log('W: ' + frameBuffer.toString('hex'));
 }
 
 module.exports = LINMaster;
