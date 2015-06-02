@@ -40,7 +40,7 @@ function LINMaster(options)
     this.scheduleSporadic = [];
 }
 
-LINMaster.prototype.start = function(callback)
+LINMaster.prototype.start = function()
 {
     var self = this;
 
@@ -74,14 +74,10 @@ LINMaster.prototype.start = function(callback)
         self.lastFrameData = Buffer.concat([self.lastFrameData, data], self.lastFrameData.length + data.length);
     });
 
-    callback();
-
     self.interval = setInterval(function()
     {
         var data = self.lastFrameData;
         self.lastFrameData = new Buffer(0);
-
-
 
         var frame = self.lastFrame;
 

@@ -19,9 +19,13 @@ function LINFrame(resources)
         LIN_ID_RESERVED: 0x3f
     };
 
-    this.setProtectedIdentifier(this.id.LIN_ID_SIGNAL, 0);
-    this.setFrameType(this.type.LIN_FRAME_UNCONDITIONAL);
-    this.setIsRequestFrame(false);
+    // this.setProtectedIdentifier(this.id.LIN_ID_SIGNAL, 0);
+    // this.setFrameType(this.type.LIN_FRAME_UNCONDITIONAL);
+    // this.setIsRequestFrame(true);
+
+    this.protectedIdentifier = this.id.LIN_ID_SIGNAL;
+    this.frameType = this.type.LIN_FRAME_UNCONDITIONAL;
+    this.isRequestFrame = true;
 }
 
 // if id == LIN_ID_SIGNAL, offset is added to id
@@ -56,7 +60,7 @@ LINFrame.prototype.setIsRequestFrame = function(isRequestFrame)
 // getData is only called if this frame is NOT request frame
 LINFrame.prototype.getResponseData = function()
 {
-    return [Math.floor(Math.random() * 10) + 1, Math.floor(Math.random() * 10) + 1, Math.floor(Math.random() * 10) + 1,];
+    return [];
 }
 
 // handleResponse is only called if this frame IS request frame
@@ -67,11 +71,10 @@ LINFrame.prototype.handleResponse = function(data)
 
 
 // Handle collisions if options.type == LIN_FRAME_EVENT_TRIGGERED and a collision is detected
-// Returns ARRAY of appropriate LINFrames or FALSE if no handler frames should be generated
-// Note that in accordance with LIN spec, this method should never return FALSE if it is called
+// Returns ARRAY of appropriate LINFrames
 LINFrame.prototype.handleCollisions = function()
 {
-    return false;
+    return [];
 }
 
 module.exports = LINFrame;
